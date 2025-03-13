@@ -293,7 +293,7 @@ def process_text(file_path, doc):
                                 for j, cell_value in enumerate(row):
                                     if j < len(table.rows[i].cells):  # Ensure we don't exceed column count
                                         table.rows[i].cells[j].text = cell_value
-                            
+                                    
                             doc.add_paragraph(f"CSV data presented as table (first 10 rows). Detected encoding: {encoding}")
                         else:
                             doc.add_paragraph("CSV file appears to be empty.")
@@ -441,17 +441,48 @@ def add_hyperlink(paragraph, text, url):
     paragraph._p.append(hyperlink)
 
 
-def get_path_context(file_path, levels=3):
+def get_path_context(file_path, input_dir=None, levels=3):
     """
     Extract the last N levels of a file path for better context.
+    If input_dir is provided, returns path context relative to input directory.
     
     Args:
         file_path (str): Full file path
+        input_dir (str, optional): Input directory path to make the context relative to
         levels (int, optional): Number of directory levels to include. Defaults to 3.
         
     Returns:
         str: String representing the path context with N levels
     """
+    # If input_dir is provided, try to make the path relative first
+    if input_dir:
+        try:
+            # Normalize paths to handle different path separators
+            norm_file_path = os.path.normpath(file_path)
+            norm_input_dir = os.path.normpath(input_dir)
+            
+            # Check if the file is in the input directory
+            if norm_file_path.startswith(norm_input_dir):
+                # Get the relative path and work with that
+                rel_path = os.path.relpath(norm_file_path, norm_input_dir)
+                path = os.path.dirname(rel_path)
+                
+                # If it's directly in the input directory
+                if path == "":
+                    return "."  # Return dot to indicate it's in the root input directory
+                    
+                # Otherwise process the parts of the relative path
+                parts = path.split(os.sep)
+                if len(parts) <= levels:
+                    return path  # Return the whole relative path if it's shorter than levels
+                else:
+                    return os.path.join(*parts[-levels:])  # Return last N levels of the relative path
+                
+            # If file is not in input directory, fall back to absolute path processing
+        except Exception:
+            pass  # Fall back to absolute path processing
+    
+    # Process absolute path (original behavior)
     parts = []
     path = os.path.dirname(file_path)
     
@@ -466,6 +497,33 @@ def get_path_context(file_path, levels=3):
     if parts:
         return os.path.join(*parts)
     return os.path.dirname(file_path)
+
+
+def get_relative_path(file_path, input_dir):
+    """
+    Get the path of a file relative to the input directory.
+    
+    Args:
+        file_path (str): Full path to the file
+        input_dir (str): Input directory path
+        
+    Returns:
+        str: Path relative to input directory, or full path if not a subpath
+    """
+    try:
+        # Normalize paths to handle different path separators
+        norm_file_path = os.path.normpath(file_path)
+        norm_input_dir = os.path.normpath(input_dir)
+        
+        # Check if the file is in the input directory
+        if norm_file_path.startswith(norm_input_dir):
+            rel_path = os.path.relpath(norm_file_path, norm_input_dir)
+            parent_dir = os.path.dirname(rel_path)
+            return parent_dir if parent_dir else "."  # Return "." if in root input dir
+        else:
+            return os.path.dirname(file_path)  # Fall back to full path if not in input dir
+    except Exception:
+        return os.path.dirname(file_path)  # Fall back in case of error
 
 
 def generate_report(input_dir, output_file):
@@ -534,38 +592,41 @@ def generate_report(input_dir, output_file):
             file_bookmarks[file_path] = bookmark_name
             
             # Get path context (last 3 levels of directory)
-            path_context = get_path_context(file_path)
+            path_context = get_path_context(file_path, input_dir)
+            
+            # Get relative path from input directory
+            rel_location = get_relative_path(file_path, input_dir)
             
             if ext.endswith('.pdf'):
                 # Include path context in the heading
                 heading_title = f"{os.path.basename(file_path)} [{path_context}]"
                 heading_para = doc.add_heading(heading_title, level=2)
                 add_bookmark(heading_para, bookmark_name)
-                doc.add_paragraph(f"Location: {os.path.dirname(file_path)}")
+                doc.add_paragraph(f"Location: {rel_location}")
                 process_pdf(file_path, doc)
             elif ext.endswith(('.doc', '.docx')):
                 heading_title = f"{os.path.basename(file_path)} [{path_context}]"
                 heading_para = doc.add_heading(heading_title, level=2)
                 add_bookmark(heading_para, bookmark_name)
-                doc.add_paragraph(f"Location: {os.path.dirname(file_path)}")
+                doc.add_paragraph(f"Location: {rel_location}")
                 process_word(file_path, doc)
             elif ext.endswith(('.xls', '.xlsx')):
                 heading_title = f"{os.path.basename(file_path)} [{path_context}]"
                 heading_para = doc.add_heading(heading_title, level=2)
                 add_bookmark(heading_para, bookmark_name)
-                doc.add_paragraph(f"Location: {os.path.dirname(file_path)}")
+                doc.add_paragraph(f"Location: {rel_location}")
                 process_excel(file_path, doc)
             elif ext.endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp')):
                 heading_title = f"{os.path.basename(file_path)} [{path_context}]"
                 heading_para = doc.add_heading(heading_title, level=2)
                 add_bookmark(heading_para, bookmark_name)
-                doc.add_paragraph(f"Location: {os.path.dirname(file_path)}")
+                doc.add_paragraph(f"Location: {rel_location}")
                 process_image(file_path, doc)
             elif ext.endswith(('.txt', '.log', '.md', '.csv')):
                 heading_title = f"{os.path.basename(file_path)} [{path_context}]"
                 heading_para = doc.add_heading(heading_title, level=2)
                 add_bookmark(heading_para, bookmark_name)
-                doc.add_paragraph(f"Location: {os.path.dirname(file_path)}")
+                doc.add_paragraph(f"Location: {rel_location}")
                 process_text(file_path, doc)
     
     # Add the file entries with internal links to the document
@@ -573,16 +634,16 @@ def generate_report(input_dir, output_file):
     
     for file_path, bookmark_name in file_bookmarks.items():
         filename = os.path.basename(file_path)
-        file_dir = os.path.dirname(file_path)
-        path_context = get_path_context(file_path)
+        rel_location = get_relative_path(file_path, input_dir)
+        path_context = get_path_context(file_path, input_dir)
         
         # Format the entry with file name and path context with internal link
         entry_para = doc.add_paragraph()
         add_internal_hyperlink(entry_para, filename, bookmark_name, f"Go to {filename}")
         entry_para.add_run(f" ({os.path.splitext(filename)[1]}) - {path_context}")
         
-        # Add the full directory path on a new line with indentation
-        entry_para.add_run("\n    Location: " + file_dir)
+        # Add the relative directory path on a new line with indentation
+        entry_para.add_run("\n    Location: " + rel_location)
     
     try:
         doc.save(output_file_abs)
