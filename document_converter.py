@@ -23,6 +23,7 @@ from docx.oxml.ns import qn
 import fnmatch
 import win32com.client  # For updating TOC
 import docx.opc.constants  # For hyperlink functionality
+import pythoncom
 
 
 def process_pdf(file_path, doc):
@@ -44,7 +45,6 @@ def process_pdf(file_path, doc):
         pix = page.get_pixmap(matrix=mat)
         img_path = f"temp_{os.path.basename(file_path)}.png"
         pix.save(img_path)
-        
         # Add to Word doc
         doc.add_picture(img_path, width=Inches(6))
         os.remove(img_path)
@@ -68,10 +68,11 @@ def process_word(file_path, doc):
     """
     try:
         # Convert Word to PDF first
-        import win32com.client
-        import os
+        # Initialize COM in this thread
+        pythoncom.CoInitialize()
         
-        word = win32com.client.Dispatch("Word.Application")
+        # Create new Word instance without affecting others
+        word = win32com.client.DispatchEx("Word.Application")
         word.Visible = False
         
         # Convert to absolute path
@@ -83,7 +84,10 @@ def process_word(file_path, doc):
             wb = word.Documents.Open(abs_path)
             wb.SaveAs(pdf_path, FileFormat=17)  # 17 represents PDF format
             wb.Close()
-            word.Quit()
+            
+            # Release Word application instead of quitting
+            word = None
+            pythoncom.CoUninitialize()
             
             # Now process the PDF using existing PDF processing function
             process_pdf(pdf_path, doc)
@@ -94,6 +98,12 @@ def process_word(file_path, doc):
                 
         except Exception as word_error:
             print(f"Error converting Word to PDF: {str(word_error)}")
+            
+            # Release Word before falling back
+            if word:
+                word = None
+            pythoncom.CoUninitialize()
+            
             # Fallback to original Word processing method
             src_doc = Document(file_path)
             
@@ -105,13 +115,10 @@ def process_word(file_path, doc):
             for table in src_doc.tables:
                 new_table = doc.add_table(rows=len(table.rows), cols=len(table.columns))
                 new_table.style = 'Table Grid'
-                
                 for i, row in enumerate(table.rows):
                     for j, cell in enumerate(row.cells):
                         new_table.cell(i, j).text = cell.text
-                        
                 doc.add_paragraph()  # Add spacing after table
-                
     except Exception as e:
         print(f"Error processing {file_path}: {str(e)}")
 
@@ -132,10 +139,11 @@ def process_excel(file_path, doc):
     """
     try:
         # Convert Excel to PDF first
-        import win32com.client
-        import os
+        # Initialize COM in this thread
+        pythoncom.CoInitialize()
         
-        excel = win32com.client.Dispatch("Excel.Application")
+        # Create new Excel instance without affecting others
+        excel = win32com.client.DispatchEx("Excel.Application")
         excel.Visible = False
         excel.DisplayAlerts = False
         
@@ -148,7 +156,10 @@ def process_excel(file_path, doc):
             wb = excel.Workbooks.Open(abs_path)
             wb.ExportAsFixedFormat(0, pdf_path)  # 0 represents PDF format
             wb.Close(False)
-            excel.Quit()
+            
+            # Release Excel application instead of quitting
+            excel = None
+            pythoncom.CoUninitialize()
             
             # Now process the PDF using existing PDF processing function
             process_pdf(pdf_path, doc)
@@ -159,6 +170,12 @@ def process_excel(file_path, doc):
                 
         except Exception as excel_error:
             print(f"Error converting Excel to PDF: {str(excel_error)}")
+            
+            # Release Excel before falling back
+            if excel:
+                excel = None
+            pythoncom.CoUninitialize()
+            
             # Fallback to openpyxl method
             try:
                 wb = openpyxl.load_workbook(file_path, data_only=True)
@@ -216,10 +233,6 @@ def process_image(file_path, doc):
     """
     try:
         # Load the image with PIL first to ensure proper handling
-        from PIL import Image
-        from io import BytesIO
-        
-        # Open and process the image with PIL
         img = Image.open(file_path)
         
         # Save to BytesIO to avoid file system operations
@@ -292,7 +305,6 @@ def process_text(file_path, doc):
                     
                     # If we get here without an exception, we found the right encoding
                     break
-                    
             except UnicodeDecodeError:
                 # If this encoding doesn't work, try the next one
                 if encoding == encodings[-1]:  # If this was the last encoding in our list
@@ -304,7 +316,6 @@ def process_text(file_path, doc):
                 print(f"Error processing {file_path} with encoding {encoding}: {str(e)}")
                 doc.add_paragraph(f"Error processing file: {str(e)}")
                 break
-                
     except Exception as e:
         print(f"Error processing {file_path}: {str(e)}")
         doc.add_paragraph(f"Error processing {file_path}: {str(e)}")
@@ -327,10 +338,11 @@ def add_bookmark(paragraph, bookmark_name):
     start.set(qn('w:id'), '0')
     start.set(qn('w:name'), bookmark_name)
     tag.append(start)
-
+    
     end = OxmlElement('w:bookmarkEnd')
     end.set(qn('w:id'), '0')
     tag.append(end)
+    
     return bookmark_name
 
 
@@ -558,6 +570,7 @@ def generate_report(input_dir, output_file):
     
     # Add the file entries with internal links to the document
     doc.add_heading('File Index', level=1)
+    
     for file_path, bookmark_name in file_bookmarks.items():
         filename = os.path.basename(file_path)
         file_dir = os.path.dirname(file_path)
@@ -567,6 +580,7 @@ def generate_report(input_dir, output_file):
         entry_para = doc.add_paragraph()
         add_internal_hyperlink(entry_para, filename, bookmark_name, f"Go to {filename}")
         entry_para.add_run(f" ({os.path.splitext(filename)[1]}) - {path_context}")
+        
         # Add the full directory path on a new line with indentation
         entry_para.add_run("\n    Location: " + file_dir)
     
@@ -575,7 +589,9 @@ def generate_report(input_dir, output_file):
         print(f"Report generated at: {output_file}")
         
         # Update TOC using Word COM interface
-        word = win32com.client.Dispatch("Word.Application")
+        pythoncom.CoInitialize()
+        
+        word = win32com.client.DispatchEx("Word.Application")
         word.Visible = False
         
         # Use absolute path when opening with Word
@@ -583,7 +599,10 @@ def generate_report(input_dir, output_file):
         word_doc.Fields.Update()
         word_doc.Save()
         word_doc.Close()
-        word.Quit()
+        
+        # Release the Word application instead of quitting
+        word = None
+        pythoncom.CoUninitialize()
     except PermissionError:
         alt_output = os.path.join(os.getcwd(), f"report_{os.path.basename(output_file)}")
         alt_output_abs = os.path.abspath(alt_output)
@@ -593,13 +612,18 @@ def generate_report(input_dir, output_file):
             print(f"Report saved to alternative location: {alt_output}")
             
             # Update TOC using Word COM interface
-            word = win32com.client.Dispatch("Word.Application")
+            pythoncom.CoInitialize()
+            
+            word = win32com.client.DispatchEx("Word.Application")
             word.Visible = False
             word_doc = word.Documents.Open(alt_output_abs)
             word_doc.Fields.Update()
             word_doc.Save()
             word_doc.Close()
-            word.Quit()
+            
+            # Release the Word application instead of quitting
+            word = None
+            pythoncom.CoUninitialize()
         except Exception as e:
             print(f"Failed to save report to both original and alternative locations.")
             print(f"Please ensure you have write permissions or try a different output location.")
@@ -617,10 +641,12 @@ if __name__ == "__main__":
         description="Generate a comprehensive report from various file types in a directory",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
+    
     parser.add_argument("-i", "--input", required=True, 
                       help="Input directory (use quotes for paths with spaces)")
     parser.add_argument("-o", "--output", default="report.docx", 
                       help="Output file name")
+    
     args = parser.parse_args()
     
     # Check that the input directory exists
